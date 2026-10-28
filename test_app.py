@@ -1,6 +1,6 @@
 import pytest
 
-from Encurtador.app import create_app, encode, valid_url
+from app import OFFSET, create_app, encode, valid_url
 
 
 @pytest.fixture
@@ -72,7 +72,6 @@ def test_invalid_url_rejected(client):
 
 def test_auto_code_skips_existing_alias(client):
     # reserva exatamente o código que o próximo ID geraria
-    from Encurtador.app import OFFSET
     reserved = encode(1 + OFFSET)
     client.post("/api/shorten", json={"url": "https://a.com", "alias": reserved})
     r = client.post("/api/shorten", json={"url": "https://b.com"})
