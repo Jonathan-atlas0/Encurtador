@@ -16,15 +16,18 @@ def test_encode_base62():
     assert encode(62) == "10"
 
 
-@pytest.mark.parametrize("url,ok", [
-    ("https://exemplo.com", True),
-    ("http://exemplo.com/a?b=1", True),
-    ("javascript:alert(1)", False),
-    ("ftp://exemplo.com", False),
-    ("exemplo.com", False),
-    ("", False),
-    ("https://" + "a" * 3000, False),
-])
+@pytest.mark.parametrize(
+    "url,ok",
+    [
+        ("https://exemplo.com", True),
+        ("http://exemplo.com/a?b=1", True),
+        ("javascript:alert(1)", False),
+        ("ftp://exemplo.com", False),
+        ("exemplo.com", False),
+        ("", False),
+        ("https://" + "a" * 3000, False),
+    ],
+)
 def test_valid_url(url, ok):
     assert valid_url(url) is ok
 
@@ -41,14 +44,18 @@ def test_shorten_and_redirect(client):
 
 def test_codes_are_unique(client):
     codes = {
-        client.post("/api/shorten", json={"url": f"https://exemplo.com/{i}"}).get_json()["code"]
+        client.post(
+            "/api/shorten", json={"url": f"https://exemplo.com/{i}"}
+        ).get_json()["code"]
         for i in range(20)
     }
     assert len(codes) == 20
 
 
 def test_custom_alias(client):
-    r = client.post("/api/shorten", json={"url": "https://exemplo.com", "alias": "meu-link"})
+    r = client.post(
+        "/api/shorten", json={"url": "https://exemplo.com", "alias": "meu-link"}
+    )
     assert r.status_code == 201
     assert r.get_json()["code"] == "meu-link"
     assert client.get("/meu-link").status_code == 302
@@ -61,8 +68,18 @@ def test_alias_conflict(client):
 
 
 def test_invalid_alias_and_reserved(client):
-    assert client.post("/api/shorten", json={"url": "https://a.com", "alias": "a b"}).status_code == 400
-    assert client.post("/api/shorten", json={"url": "https://a.com", "alias": "api"}).status_code == 400
+    assert (
+        client.post(
+            "/api/shorten", json={"url": "https://a.com", "alias": "a b"}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/api/shorten", json={"url": "https://a.com", "alias": "api"}
+        ).status_code
+        == 400
+    )
 
 
 def test_invalid_url_rejected(client):
@@ -80,7 +97,9 @@ def test_auto_code_skips_existing_alias(client):
 
 
 def test_click_counter(client):
-    code = client.post("/api/shorten", json={"url": "https://exemplo.com"}).get_json()["code"]
+    code = client.post("/api/shorten", json={"url": "https://exemplo.com"}).get_json()[
+        "code"
+    ]
     for _ in range(3):
         client.get(f"/{code}")
     stats = client.get(f"/api/stats/{code}").get_json()
