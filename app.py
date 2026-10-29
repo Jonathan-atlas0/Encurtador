@@ -5,6 +5,7 @@ import string
 from urllib.parse import urlparse
 
 
+
 from flask import Flask, g, jsonify, redirect, render_template, request
 
 ALPHABET = string.digits + string.ascii_lowercase + string.ascii_uppercase
