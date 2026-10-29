@@ -7,14 +7,32 @@ on:
     branches: [main, develop]
 
 jobs:
-  build:
+  lint:
+    name: lint
     runs-on: ubuntu-latest
     steps:
       - name: Baixar o código
         uses: actions/checkout@v4
 
-      - name: Listar arquivos
-        run: ls -la
+      - name: Configurar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar o ruff
+        run: pip install ruff
+
+      - name: Verificar o estilo do código
+        run: ruff check .
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
 
       - name: Configurar o Python
         uses: actions/setup-python@v5
@@ -27,3 +45,35 @@ jobs:
 
       - name: Rodar os testes
         run: pytest -v
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Verificar se a aplicação inicia
+        run: python -c "from app import create_app; create_app('build-check.db'); print('Aplicação OK')"
+
+      - name: Empacotar a aplicação
+        run: |
+          mkdir dist
+          cp app.py requirements.txt dist/
+          cp -r templates dist/
+
+      - name: Guardar o pacote gerado
+        uses: actions/upload-artifact@v4
+        with:
+          name: encurtador-${{ github.sha }}
+          path: dist/
