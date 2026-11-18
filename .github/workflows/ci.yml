@@ -125,7 +125,72 @@ jobs:
             .
 
       - name: Validar resultado do SAST
-        run: python .github/scripts/check_sast.py semgrep.json
+        run: |
+          python - semgrep.json <<'PYEOF'
+          """Valida o relatório JSON do Semgrep (job SAST).
+
+          Falha (exit 1) se:
+            - o relatório não existir ou for inválido;
+            - o Semgrep tiver tido erros de execução ou não tiver escaneado nenhum arquivo;
+            - houver achados com severidade ERROR (ou acima de SAST_FAIL_ON).
+          """
+
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          ORDER = {"INFO": 0, "WARNING": 1, "ERROR": 2}
+
+
+          def main(path: str) -> int:
+              report_file = Path(path)
+              if not report_file.is_file():
+                  print(f"::error::Relatório do Semgrep não encontrado: {path}")
+                  return 1
+              try:
+                  report = json.loads(report_file.read_text())
+              except json.JSONDecodeError as exc:
+                  print(f"::error::Relatório do Semgrep inválido: {exc}")
+                  return 1
+
+              errors = report.get("errors", [])
+              scanned = report.get("paths", {}).get("scanned", [])
+              findings = report.get("results", [])
+
+              if errors:
+                  for err in errors:
+                      print(f"::error::Erro do Semgrep: {err.get('message', err)}")
+                  return 1
+              if not scanned:
+                  print("::error::O Semgrep não escaneou nenhum arquivo (scan vazio).")
+                  return 1
+
+              threshold = os.environ.get("SAST_FAIL_ON", "ERROR").upper()
+              limit = ORDER[threshold]
+
+              blocking = []
+              for f in findings:
+                  sev = f["extra"]["severity"].upper()
+                  where = f"{f['path']}:{f['start']['line']}"
+                  msg = f["extra"]["message"].splitlines()[0]
+                  level = "error" if ORDER.get(sev, 0) >= limit else "warning"
+                  print(
+                      f"::{level} file={f['path']},line={f['start']['line']}::[{sev}] {f['check_id']} - {msg}"
+                  )
+                  if level == "error":
+                      blocking.append(where)
+
+              print(f"\nArquivos escaneados: {len(scanned)}")
+              print(
+                  f"Achados: {len(findings)} (bloqueantes, severidade >= {threshold}: {len(blocking)})"
+              )
+              return 1 if blocking else 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else "semgrep.json"))
+          PYEOF
 
       - name: Guardar relatório do Semgrep
         if: always()
@@ -198,7 +263,64 @@ jobs:
               -J zap-report.json -r zap-report.html -I
 
       - name: Validar resultado do DAST
-        run: python .github/scripts/check_dast.py zap-wrk/zap-report.json
+        run: |
+          python - zap-wrk/zap-report.json <<'PYEOF'
+          """Valida o relatório JSON do OWASP ZAP (job DAST).
+
+          Falha (exit 1) se:
+            - o relatório não existir ou for inválido;
+            - o ZAP não tiver analisado nenhuma URL (scan vazio);
+            - houver alertas com risco >= DAST_FAIL_ON_RISK (3 = High, 2 = Medium).
+          """
+
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          RISK = {"0": "Informational", "1": "Low", "2": "Medium", "3": "High"}
+
+
+          def main(path: str) -> int:
+              report_file = Path(path)
+              if not report_file.is_file():
+                  print(f"::error::Relatório do ZAP não encontrado: {path}")
+                  return 1
+              try:
+                  report = json.loads(report_file.read_text())
+              except json.JSONDecodeError as exc:
+                  print(f"::error::Relatório do ZAP inválido: {exc}")
+                  return 1
+
+              sites = report.get("site", [])
+              if not sites:
+                  print("::error::O ZAP não analisou nenhum site (scan vazio).")
+                  return 1
+
+              limit = int(os.environ.get("DAST_FAIL_ON_RISK", "3"))
+              blocking = 0
+              total = 0
+              for site in sites:
+                  for alert in site.get("alerts", []):
+                      total += 1
+                      code = str(alert.get("riskcode", "0"))
+                      n = len(alert.get("instances", []))
+                      level = "error" if int(code) >= limit else "warning"
+                      print(
+                          f"::{level}::[{RISK.get(code, code)}] {alert.get('name')} ({n} ocorrência(s))"
+                      )
+                      if level == "error":
+                          blocking += 1
+
+              print(
+                  f"\nAlertas: {total} (bloqueantes, risco >= {RISK.get(str(limit), limit)}: {blocking})"
+              )
+              return 1 if blocking else 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else "zap-report.json"))
+          PYEOF
 
       - name: Guardar relatórios do ZAP
         if: always()
