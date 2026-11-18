@@ -132,4 +132,5 @@ def create_app(db_path: str | None = None) -> Flask:
 
 
 if __name__ == "__main__":
-    create_app().run(debug=True)
+    # debug só quando pedido explicitamente (o modo debug expõe o console do Werkzeug)
+    create_app().run(debug=os.environ.get("FLASK_DEBUG") == "1")
