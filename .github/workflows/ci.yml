@@ -99,7 +99,7 @@ jobs:
     needs: lint
     env:
       # Severidade mínima que reprova o job (INFO, WARNING ou ERROR)
-      SAST_FAIL_ON: ERROR
+      SAST_FAIL_ON: WARNING
     steps:
       - name: Baixar o código
         uses: actions/checkout@v4
