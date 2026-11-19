@@ -1,0 +1,338 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+# Cancela execuções antigas da mesma branch quando chega um push novo
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar o Ruff
+        run: pip install ruff
+
+      - name: Verificar estilo e erros comuns
+        run: ruff check .
+
+      - name: Verificar formatação
+        run: ruff format --check .
+
+  test:
+    name: Testes (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Instalar dependências
+        run: |
+          pip install -r requirements.txt
+          pip install pytest-cov
+
+      - name: Rodar os testes com cobertura
+        run: pytest -v --cov=app --cov-report=term-missing --cov-report=xml
+
+      - name: Guardar relatório de cobertura
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  security:
+    name: Segurança das dependências
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Auditar dependências
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt
+
+  # ---------------------------------------------------------------------------
+  # SAST: análise estática do código-fonte com Semgrep (não executa a aplicação)
+  # ---------------------------------------------------------------------------
+  sast:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    needs: lint
+    env:
+      # Severidade mínima que reprova o job (INFO, WARNING ou ERROR)
+      SAST_FAIL_ON: WARNING
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar o Semgrep
+        run: pip install semgrep
+
+      - name: Rodar o Semgrep
+        # Gera o relatório sem reprovar aqui; quem decide é a validação abaixo
+        run: |
+          semgrep scan \
+            --config p/python \
+            --config p/flask \
+            --config p/owasp-top-ten \
+            --metrics=off \
+            --exclude test_app.py \
+            --json --output semgrep.json \
+            .
+
+      - name: Validar resultado do SAST
+        run: |
+          python - semgrep.json <<'PYEOF'
+          """Valida o relatório JSON do Semgrep (job SAST).
+
+          Falha (exit 1) se:
+            - o relatório não existir ou for inválido;
+            - o Semgrep tiver tido erros de execução ou não tiver escaneado nenhum arquivo;
+            - houver achados com severidade ERROR (ou acima de SAST_FAIL_ON).
+          """
+
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          ORDER = {"INFO": 0, "WARNING": 1, "ERROR": 2}
+
+
+          def main(path: str) -> int:
+              report_file = Path(path)
+              if not report_file.is_file():
+                  print(f"::error::Relatório do Semgrep não encontrado: {path}")
+                  return 1
+              try:
+                  report = json.loads(report_file.read_text())
+              except json.JSONDecodeError as exc:
+                  print(f"::error::Relatório do Semgrep inválido: {exc}")
+                  return 1
+
+              errors = report.get("errors", [])
+              scanned = report.get("paths", {}).get("scanned", [])
+              findings = report.get("results", [])
+
+              if errors:
+                  for err in errors:
+                      print(f"::error::Erro do Semgrep: {err.get('message', err)}")
+                  return 1
+              if not scanned:
+                  print("::error::O Semgrep não escaneou nenhum arquivo (scan vazio).")
+                  return 1
+
+              threshold = os.environ.get("SAST_FAIL_ON", "ERROR").upper()
+              limit = ORDER[threshold]
+
+              blocking = []
+              for f in findings:
+                  sev = f["extra"]["severity"].upper()
+                  where = f"{f['path']}:{f['start']['line']}"
+                  msg = f["extra"]["message"].splitlines()[0]
+                  level = "error" if ORDER.get(sev, 0) >= limit else "warning"
+                  print(
+                      f"::{level} file={f['path']},line={f['start']['line']}::[{sev}] {f['check_id']} - {msg}"
+                  )
+                  if level == "error":
+                      blocking.append(where)
+
+              print(f"\nArquivos escaneados: {len(scanned)}")
+              print(
+                  f"Achados: {len(findings)} (bloqueantes, severidade >= {threshold}: {len(blocking)})"
+              )
+              return 1 if blocking else 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else "semgrep.json"))
+          PYEOF
+
+      - name: Guardar relatório do Semgrep
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-semgrep-report
+          path: semgrep.json
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # DAST: sobe a aplicação e ataca ela em execução com o OWASP ZAP
+  # ---------------------------------------------------------------------------
+  dast:
+    name: DAST (OWASP ZAP)
+    runs-on: ubuntu-latest
+    needs: [test, sast]
+    timeout-minutes: 15
+    env:
+      APP_URL: http://localhost:5000
+      # Risco mínimo que reprova o job: 3 = High, 2 = Medium
+      DAST_FAIL_ON_RISK: "3"
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Configurar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Subir a aplicação
+        env:
+          DB_PATH: ${{ runner.temp }}/dast.db
+        run: |
+          nohup flask --app app run --host 0.0.0.0 --port 5000 > app.log 2>&1 &
+          echo $! > app.pid
+
+      - name: Validar que a aplicação está no ar
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$APP_URL/" || true)
+            if [ "$code" = "200" ]; then
+              echo "Aplicação respondeu 200 em $APP_URL"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::A aplicação não subiu (último status: $code)"
+          cat app.log
+          exit 1
+
+      - name: Semear um link para o scan ter mais o que explorar
+        run: |
+          curl -fsS -X POST "$APP_URL/api/shorten" \
+            -H "Content-Type: application/json" \
+            -d '{"url": "https://exemplo.com", "alias": "dast-seed"}'
+
+      - name: Rodar o OWASP ZAP (baseline)
+        run: |
+          mkdir -p zap-wrk && chmod 777 zap-wrk
+          # -I: não reprova pelo código de saída do ZAP; a validação abaixo decide
+          docker run --rm --network host \
+            -v "$PWD/zap-wrk:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t "$APP_URL" \
+              -J zap-report.json -r zap-report.html -I
+
+      - name: Validar resultado do DAST
+        run: |
+          python - zap-wrk/zap-report.json <<'PYEOF'
+          """Valida o relatório JSON do OWASP ZAP (job DAST).
+
+          Falha (exit 1) se:
+            - o relatório não existir ou for inválido;
+            - o ZAP não tiver analisado nenhuma URL (scan vazio);
+            - houver alertas com risco >= DAST_FAIL_ON_RISK (3 = High, 2 = Medium).
+          """
+
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          RISK = {"0": "Informational", "1": "Low", "2": "Medium", "3": "High"}
+
+
+          def main(path: str) -> int:
+              report_file = Path(path)
+              if not report_file.is_file():
+                  print(f"::error::Relatório do ZAP não encontrado: {path}")
+                  return 1
+              try:
+                  report = json.loads(report_file.read_text())
+              except json.JSONDecodeError as exc:
+                  print(f"::error::Relatório do ZAP inválido: {exc}")
+                  return 1
+
+              sites = report.get("site", [])
+              if not sites:
+                  print("::error::O ZAP não analisou nenhum site (scan vazio).")
+                  return 1
+
+              limit = int(os.environ.get("DAST_FAIL_ON_RISK", "3"))
+              blocking = 0
+              total = 0
+              for site in sites:
+                  for alert in site.get("alerts", []):
+                      total += 1
+                      code = str(alert.get("riskcode", "0"))
+                      n = len(alert.get("instances", []))
+                      level = "error" if int(code) >= limit else "warning"
+                      print(
+                          f"::{level}::[{RISK.get(code, code)}] {alert.get('name')} ({n} ocorrência(s))"
+                      )
+                      if level == "error":
+                          blocking += 1
+
+              print(
+                  f"\nAlertas: {total} (bloqueantes, risco >= {RISK.get(str(limit), limit)}: {blocking})"
+              )
+              return 1 if blocking else 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else "zap-report.json"))
+          PYEOF
+
+      - name: Guardar relatórios do ZAP
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dast-zap-report
+          path: |
+            zap-wrk/zap-report.json
+            zap-wrk/zap-report.html
+            app.log
+          if-no-files-found: warn
+
+      - name: Encerrar a aplicação
+        if: always()
+        run: kill "$(cat app.pid)" 2>/dev/null || true

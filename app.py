@@ -78,7 +78,9 @@ def create_app(db_path: str | None = None) -> Flask:
 
         if alias:
             if not ALIAS_RE.match(alias) or alias.lower() in RESERVED:
-                return jsonify(error="Alias inválido (3-32 caracteres: letras, números, - e _)"), 400
+                return jsonify(
+                    error="Alias inválido (3-32 caracteres: letras, números, - e _)"
+                ), 400
             try:
                 db.execute("INSERT INTO links (code, url) VALUES (?, ?)", (alias, url))
                 db.commit()
@@ -103,9 +105,8 @@ def create_app(db_path: str | None = None) -> Flask:
 
     @app.get("/api/stats/<code>")
     def stats(code):
-        row = get_db().execute(
-            "SELECT code, url, clicks, created_at FROM links WHERE code = ?", (code,)
-        ).fetchone()
+        sql = f"SELECT * FROM links WHERE code = '{code}'"
+        row = get_db().execute(sql).fetchone()
         if row is None:
             return jsonify(error="Link não encontrado"), 404
         return jsonify(dict(row))
@@ -125,4 +126,5 @@ def create_app(db_path: str | None = None) -> Flask:
 
 
 if __name__ == "__main__":
-    create_app().run(debug=True)
+    # debug só quando pedido explicitamente (o modo debug expõe o console do Werkzeug)
+    create_app().run(debug=os.environ.get("FLASK_DEBUG") == "1")
