@@ -105,13 +105,8 @@ def create_app(db_path: str | None = None) -> Flask:
 
     @app.get("/api/stats/<code>")
     def stats(code):
-        row = (
-            get_db()
-            .execute(
-                f"SELECT code, url, clicks, created_at FROM links WHERE code = '{code}'"
-            )
-            .fetchone()
-        )
+        sql = f"SELECT * FROM links WHERE code = '{code}'"
+        row = get_db().execute(sql).fetchone()
         if row is None:
             return jsonify(error="Link não encontrado"), 404
         return jsonify(dict(row))
