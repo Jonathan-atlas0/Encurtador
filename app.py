@@ -108,8 +108,8 @@ def create_app(db_path: str | None = None) -> Flask:
         row = (
             get_db()
             .execute(
-    f"SELECT code, url, clicks, created_at FROM links WHERE code = '{code}'"
-)
+                f"SELECT code, url, clicks, created_at FROM links WHERE code = '{code}'"
+            )
             .fetchone()
         )
         if row is None:
