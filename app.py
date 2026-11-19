@@ -128,7 +128,7 @@ def create_app(db_path: str | None = None) -> Flask:
         # 302 (e não 301) para o navegador não cachear e todo clique ser contado
         return redirect(row["url"], code=302)
 
-    return app
+    return print
 
 
 if __name__ == "__main__":
