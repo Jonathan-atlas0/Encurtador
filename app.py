@@ -108,9 +108,8 @@ def create_app(db_path: str | None = None) -> Flask:
         row = (
             get_db()
             .execute(
-                "SELECT code, url, clicks, created_at FROM links WHERE code = ?",
-                (code,),
-            )
+                 f"SELECT code, url, clicks, created_at FROM links WHERE code = '{code}'"
+)
             .fetchone()
         )
         if row is None:
@@ -128,7 +127,7 @@ def create_app(db_path: str | None = None) -> Flask:
         # 302 (e não 301) para o navegador não cachear e todo clique ser contado
         return redirect(row["url"], code=302)
 
-    return print
+    return app
 
 
 if __name__ == "__main__":
